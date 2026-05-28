@@ -137,17 +137,17 @@ def fetch_secondary():
 
     items = []
 
-    # 方法1: show_dialog 中的商品数据
+    # 方法1: show_dialog / show_dialog_new 中的商品数据
     dialogs = re.findall(
-        r"show_dialog\(['\"]([^'\"]+)['\"],\s*['\"]([^'\"]+)['\"],\s*['\"]([^'\"]+)['\"]",
+        r"show_dialog(?:_new)?\(['\"]([^'\"]+)['\"],\s*['\"]([^'\"]+)['\"],\s*['\"]([^'\"]+)['\"]",
         html
     )
     for name, category, desc in dialogs:
         if any(k in name for k in ['球', '蛋', '矿', '粉', '石', '果', '药', '链', '珠', '玉', '璃']):
             items.append({"name": name, "category": category})
 
-    # 方法2: "·商品名 NNN洛克贝"
-    name_price = re.findall(r'·\s*([^\s<·]+?)\s+(\d+)洛克贝', html)
+    # 方法2: "·商品名 NNN洛克贝" 或 "·商品名 NNw洛克贝"（w=万）
+    name_price = re.findall(r'·\s*([^\s<·]+?)\s+(\d+w?)洛克贝', html)
     for name, price in name_price:
         name = name.strip()
         if name and len(name) < 20:

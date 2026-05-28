@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 洛克王国远行商人高价值商品监控 v4
-- 双源抓取：rocokingdomworld.org JSON + onebiji.com HTML
+- 双源抓取，以最新为准
 - 轮次时效校验：数据时间戳必须 >= 当前轮次开始时间
 - 高价值商品命中推送，无则静默
 """
@@ -12,11 +12,10 @@ import urllib.request
 from datetime import datetime, timezone, timedelta
 
 # === 配置 ===
-PRIMARY_URL = "https://rocokingdomworld.org/data/merchant.json"
+PRIMARY_URL = "https://rocokingdomworld.org/api/merchant/live"
 SECONDARY_URL = "https://www.onebiji.com/hykb_tools/comm/lkwgmerchant/preview.php?id=1&immgj=0"
 BJT = timezone(timedelta(hours=8))
 
-# 高价值商品关键词（模糊匹配，按需自定义）
 HIGH_VALUE_KEYWORDS = [
     "炫彩蛋", "炫彩精灵蛋",
     "棱镜球", "织梦棱镜球",
@@ -109,11 +108,13 @@ def fetch_primary(round_start):
         except Exception:
             pass
 
-    # 获取当前轮次商品（含全天商品，去重）
+    # 获取当前轮次商品
     round_num = get_current_round_info()[0]
     rounds = data.get("rounds", {})
     items = rounds.get(str(round_num), rounds.get(round_num, []))
     items = items + data.get("items", [])
+
+    # 去重
     seen = set()
     unique = []
     for item in items:
@@ -185,31 +186,40 @@ def main():
         return
 
     # === 判断数据时效 ===
+    # 主源：有 fetchedAt，可以精确判断是否属于当前轮次
+    # 副源：HTML 实时页面，抓到即用，无法判断服务端缓存是否过期
+    # 但如果我们同时有主源的 fetchedAt，可以间接推断副源是否也可能过期
+
     primary_names = sorted([i["name"] for i in primary_items])
     secondary_names = sorted([i["name"] for i in secondary_items])
     sources_agree = (primary_names == secondary_names)
 
     # === 选择权威源 ===
     if sources_agree and primary_items:
+        # 两源一致 → 用主源（信息更全）
         best_items = primary_items
         best_label = "双源一致"
-        data_is_current = primary_is_current
+        data_is_current = primary_is_current  # 以主源时间为准
     elif primary_err:
+        # 主源失败 → 用副源，但无法验证时效
         best_items = secondary_items
         best_label = "仅副源（onebiji）"
-        data_is_current = True
+        data_is_current = True  # 副源是实时页面，假设当前（无法精确验证）
     elif secondary_err:
+        # 副源失败 → 用主源
         best_items = primary_items
         best_label = f"仅主源（数据来自 {primary_fresh_desc}）"
         data_is_current = primary_is_current
     elif primary_is_current:
+        # 主源属于当前轮次 → 用主源
         best_items = primary_items
         best_label = f"主源（数据来自 {primary_fresh_desc}）"
         data_is_current = True
     else:
+        # 主源过期 → 用副源（实时页面更可能有新数据）
         best_items = secondary_items
         best_label = f"副源（主源数据来自 {primary_fresh_desc}，属于上一轮）"
-        data_is_current = True
+        data_is_current = True  # 副源抓到就用
 
     # === 高价值检测 ===
     hits = check_high_value(best_items)
@@ -224,6 +234,7 @@ def main():
         print()
         print("快上线购买！")
 
+        # 两源不一致时补充说明
         if not sources_agree and not primary_err and not secondary_err:
             other = secondary_names if best_items == primary_items else primary_names
             diff = set(other) - set(primary_names if best_items == primary_items else secondary_names)
@@ -233,6 +244,7 @@ def main():
 
     # 无高价值商品
     if not data_is_current:
+        # 数据可能不是当前轮次的，提醒用户
         print(f"⚠️ 第{current_round}轮数据可能未刷新")
         print(f"⏰ {now.strftime('%H:%M')}（{round_label.get(current_round, '')}）")
         print(f"📡 {best_label}")
@@ -241,10 +253,13 @@ def main():
         print("建议稍后再查或手动确认。")
         return
 
+    # 两源不一致但都无高价值 → 告知差异
     if not sources_agree and not primary_err and not secondary_err:
         print(f"ℹ️ 第{current_round}轮两源商品不一致，但均无高价值物品。")
         print(f"  主源: {', '.join(primary_names) if primary_names else '无'}")
         print(f"  副源: {', '.join(secondary_names) if secondary_names else '无'}")
+
+    # 正常静默（两源一致，无高价值，数据属于当前轮次）
 
 
 if __name__ == "__main__":

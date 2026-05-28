@@ -133,6 +133,10 @@ HIGH_VALUE_KEYWORDS = [
 
 **临时上架商品：** 5月22日的祝福项链、炫彩蛋是运营临时加入的。这类商品不在预设排期中，但只要数据源及时更新（通常在商品上架后几分钟到半小时内），脚本就能抓到。
 
+## Data Sources
+
+详见 [references/data-sources.md](references/data-sources.md) — 包含两个数据源的 API 详情、返回格式、解析方法和实测踩坑记录。
+
 ## Troubleshooting
 
 ### "⚠️ 数据可能未刷新"

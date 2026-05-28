@@ -21,9 +21,10 @@ metadata:
 自动监控《洛克王国：世界》远行商人的商品刷新，在出现高价值商品（炫彩蛋、棱镜球、祝福项链、国王球）时推送提醒，无则静默。
 
 **数据链路：**
-- **主源：** rocokingdomworld.org（JSON，有 `fetchedAt` 时间戳，可精确校验时效）
+- **主源：** rocokingdomworld.org `/api/merchant/live`（实时 JSON API，有 `fetchedAt` 时间戳）
 - **副源：** onebiji.com（HTML 实时渲染页面，无时间戳但数据通常更新较快）
 - 两源交叉验证，不一致时以最新/最可信的为准
+- ⚠️ 同一网站还有 `/data/merchant.json`（静态缓存，更新极慢），**不要用这个**
 
 ## When to Use
 
@@ -39,16 +40,21 @@ metadata:
 
 ### 2. 创建定时任务
 
-远行商人每天 08:00、12:00、16:00、20:00 北京时间刷新商品，建议在刷新后 15 分钟执行（给数据源更新时间）：
+远行商人每天 08:00、12:00、16:00、20:00 北京时间刷新商品，建议在刷新后 15 分钟执行（给数据源更新时间）。**注意：Hermes cron 表达式按部署机器/调度器本地时区解释，不一定是 UTC。先确认 `date` 输出的时区，再写 cron 表达式：**
+
+- 如果机器是北京时间 / `Asia/Shanghai`：用 `15 8,12,16,20 * * *`
+- 只有当调度器明确使用 UTC 时，才用 `15 0,4,8,12 * * *`
 
 ```
 cronjob create:
   name: 洛克王国远行商人高价值监控
-  schedule: "15 0,4,8,12 * * *"   # UTC 时间，对应北京时间 08:15/12:15/16:15/20:15
+  schedule: "15 8,12,16,20 * * *"   # 北京时间机器：08:15/12:15/16:15/20:15
   script: roco_merchant_check.py
   no_agent: true
   deliver: origin
 ```
+
+验证创建后一定要看 `next_run_at`，确认下一次运行时间落在预期的北京时间轮次后。例如现在是 19:00，北京时间机器上 `next_run_at` 应该是当天 20:15；如果显示次日 00:15，说明时区/表达式写错了。
 
 ### 3. 自定义高价值商品
 
@@ -122,6 +128,27 @@ HIGH_VALUE_KEYWORDS = [
 - **主源过期** → 自动 fallback 到副源（实时 HTML 页面）
 - **两源不一致** → 以更新时间更新的为准，并在输出中标注差异
 
+## Common Pitfalls
+
+1. **用错了主源 URL。** rocokingdomworld.org 有两个端点：
+   - `/api/merchant/live` — **实时 API**，浏览器 JS 优先请求这个，数据最新
+   - `/data/merchant.json` — 静态缓存，更新极慢（实测曾 8 小时不更新）
+   - **必须用 `/api/merchant/live`**，否则拿到的是过期数据
+
+2. **onebiji.com 的价格格式不只纯数字。** 血脉秘药的价格是 `16w洛克贝`（w=万），不是 `160000洛克贝`。正则必须支持 `\d+w?` 而非仅 `\d+`。
+
+3. **onebiji.com 的函数名有变体。** 商品数据在 `show_dialog(...)` 和 `show_dialog_new(...)` 两种 onclick 中，正则要用 `show_dialog(?:_new)?`。
+
+4. **`no_agent: true` 的 cron job 会把 stdout 原样推送给用户。** 脚本设计原则：只有高价值商品命中时才输出，其他情况（包括两源不一致但无高价值）一律静默。否则用户会收到大量无用通知。
+
+5. **两源不一致 ≠ 一定有问题。** onebiji HTML 解析可能漏抓商品（如价格格式不匹配），不代表游戏里有惊喜商品。不要因为两源不一致就输出警告——只有高价值命中才通知。
+
+6. **跨午夜轮次不能用 `hour=24`。** Python `datetime.replace(hour=24)` 会抛 `ValueError: hour must be in 0..23`，导致 20:00-24:00 这类最后一轮在晚上执行失败。轮次结束为 24:00 时，应表示为“次日 00:00”：`(now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)`。
+
+7. **不要默认把 Hermes cron 当成 UTC。** cron 表达式通常按调度器/机器本地时区解释。在北京时间部署中，`15 0,4,8,12 * * *` 实际是 00:15/04:15/08:15/12:15，不会跑 20:15。创建或更新后必须检查 `next_run_at`。
+
+7. **确认 Hermes cron 的时区，不要盲目按 UTC 换算。** 在当前部署里，cron 表达式按本机 `Asia/Shanghai/+0800` 解释。远行商人 08:15/12:15/16:15/20:15 北京时间应写成 `15 8,12,16,20 * * *`，不是 `15 0,4,8,12 * * *`。如果迁移到其他机器，先用 `date` / cron `next_run_at` 验证调度时区，再决定是否换算。
+
 ## Limitations
 
 | ✅ 能做到 | ❌ 做不到 |
@@ -174,8 +201,9 @@ hermes cron remove <job_id>
 ## Verification Checklist
 
 - [ ] 脚本已放到 `~/.hermes/scripts/roco_merchant_check.py`
-- [ ] 手动运行脚本确认无报错
-- [ ] Cron 任务已创建，schedule 为 `15 0,4,8,12 * * *`
-- [ ] `no_agent: true`（纯脚本执行，不消耗 token）
+- [ ] 晚上第 4 轮（20:00-24:00）手动运行脚本确认不会因 `hour=24` 报错
+- [ ] Cron 任务已创建，schedule 为 `15 8,12,16,20 * * *`（当前部署按北京时间解释；迁移环境时先验证时区）
+- [ ] Cron 任务已创建，schedule 为 `15 8,12,16,20 * * *`（北京时间机器）或已按实际调度器时区换算
+- [ ] 创建/更新后已检查 `next_run_at`，确认下一次运行是预期的 08:15/12:15/16:15/20:15 北京时间
 - [ ] `HIGH_VALUE_KEYWORDS` 已按需自定义
 - [ ] 首次运行后确认消息推送正常

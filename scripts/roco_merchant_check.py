@@ -48,7 +48,10 @@ def get_current_round_info():
     for round_num, start_h, end_h in ROUNDS:
         if start_h <= h < end_h:
             round_start = now.replace(hour=start_h, minute=0, second=0, microsecond=0)
-            round_end = now.replace(hour=end_h, minute=0, second=0, microsecond=0)
+            if end_h == 24:
+                round_end = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+            else:
+                round_end = now.replace(hour=end_h, minute=0, second=0, microsecond=0)
             return round_num, round_start, round_end
     return None
 
